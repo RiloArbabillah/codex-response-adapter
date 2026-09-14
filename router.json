@@ -1,0 +1,44 @@
+{
+  "gateway": {
+    "clientKeyEnv": "CODEX_ADAPTER_GATEWAY_KEY"
+  },
+  "1if": {
+    "upstream": "https://api.1inference.com/v1/chat/completions",
+    "envKey": "ONEIF_API_KEY",
+    "account": "1if / 1inference",
+    "supports": {
+      "toolChoice": true,
+      "parallelToolCalls": true
+    }
+  },
+  "bai": {
+    "upstream": "https://api.b.ai/v1/chat/completions",
+    "envKey": "BAI_API_KEY",
+    "account": "b.ai",
+    "supports": {
+      "toolChoice": false,
+      "parallelToolCalls": false
+    }
+  },
+  "ontoken": {
+    "upstream": "https://api.ontoken.id/v1/chat/completions",
+    "envKey": "ONTOKEN_API_KEY",
+    "account": "ON Token",
+    "supports": {
+      "toolChoice": true,
+      "parallelToolCalls": true
+    }
+  },
+  "codexdeka": {
+    "upstream": "https://codex2.deka.dev/v1/responses",
+    "envKey": "CODEXDEKA_API_KEY",
+    "account": "Codex Deka",
+    "wire": "responses"
+  },
+  "zai": {
+    "upstream": "https://api.z.ai/api/v1/responses",
+    "envKey": "ZAI_API_KEY",
+    "account": "Z.AI",
+    "wire": "responses"
+  }
+}
