@@ -13,7 +13,7 @@ dari beberapa akun jadi satu dropdown, dengan adapter lokal
 3. Adapter membaca prefix slug:
    - `ontoken/...`, `1if/...`, `bai/...` → diterjemahkan Responses ⇄ Chat
      Completions lalu diteruskan ke upstream masing-masing.
-   - `codexdeka/...` → **passthrough** langsung (upstream sudah Responses-native).
+   - `zai/...` → **passthrough** langsung (upstream sudah Responses-native).
    - Tanpa prefix → pakai provider dari bearer token (perilaku lama).
 4. Kredensial klien pakai satu key: `CODEX_ADAPTER_GATEWAY_KEY` (di `~/.zshenv`).
    Adapter menukar key ini dengan API key provider yang sesuai sebelum request
@@ -41,17 +41,11 @@ cd /path/to/codex-response-adapter
 
 # Chat-Completions providers: regenerate masing-masing dari /v1/models dulu,
 # lalu gabungkan.
-node scripts/build-responses-catalog.mjs \
-  --out /Users/macbook/.codex/model-catalogs/codexdeka.json \
-  --base-url https://codex2.deka.dev/v1 \
-  --env-key CODEXDEKA_API_KEY --label "Codex Deka"
-
 node scripts/build-merged-catalog.mjs \
   --out /Users/macbook/.codex/model-catalogs/merged.json \
   1if=/Users/macbook/.codex/model-catalogs/1if.json \
   ontoken=/Users/macbook/.codex/model-catalogs/ontoken.json \
-  bai=/Users/macbook/.codex/model-catalogs/bai.json \
-  codexdeka=/Users/macbook/.codex/model-catalogs/codexdeka.json
+  bai=/Users/macbook/.codex/model-catalogs/bai.json
 
 # Restart adapter supaya router.json baru terbaca (katalog cukup refocus app).
 ./start.sh
