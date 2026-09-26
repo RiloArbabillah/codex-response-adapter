@@ -111,6 +111,8 @@ Field:
 | `upstream` | ✅ | URL endpoint provider |
 | `envKey` | ❌ | Nama env var API key (default: `<NAMA>_API_KEY`) |
 | `account` | ❌ | Label untuk health endpoint |
+| `forceNonStream` | ❌ | Paksa upstream non-stream, lalu kirim ulang hasilnya sebagai SSE Responses |
+| `sanitizeToolNames` | ❌ | Ubah nama tool agar valid untuk provider dengan aturan nama ketat |
 | `supports.toolChoice` | ❌ | Provider mendukung `tool_choice` |
 | `supports.parallelToolCalls` | ❌ | Provider mendukung parallel tool calls |
 | `wire` | ❌ | `"responses"` untuk passthrough, tanpa field ini = Chat Completions |

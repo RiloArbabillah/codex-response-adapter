@@ -20,6 +20,16 @@
       "parallelToolCalls": false
     }
   },
+  "gateai": {
+    "upstream": "https://gateai.id/v1/chat/completions",
+    "envKey": "GATEAI_API_KEY",
+    "account": "Gate.AI",
+    "forceNonStream": true,
+    "supports": {
+      "toolChoice": true,
+      "parallelToolCalls": true
+    }
+  },
   "ontoken": {
     "upstream": "https://api.ontoken.id/v1/chat/completions",
     "envKey": "ONTOKEN_API_KEY",
@@ -40,5 +50,25 @@
     "envKey": "ZAI_API_KEY",
     "account": "Z.AI",
     "wire": "responses"
+  },
+  "deepfree": {
+    "upstream": "http://127.0.0.1:8080/v1/chat/completions",
+    "envKey": "DEEPFREE_API_KEY",
+    "account": "DeepSeek Free (Local Proxy)",
+    "supports": {
+      "toolChoice": true,
+      "parallelToolCalls": true
+    }
+  },
+  "kimi": {
+    "upstream": "https://api.kimi.com/coding/v1/chat/completions",
+    "envKey": "KIMI_API_KEY",
+    "account": "Kimi Coding",
+    "forceNonStream": true,
+    "sanitizeToolNames": true,
+    "supports": {
+      "toolChoice": true,
+      "parallelToolCalls": true
+    }
   }
 }
