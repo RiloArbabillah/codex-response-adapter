@@ -138,6 +138,8 @@ function buildRouter(config) {
       // "chat" (default) translates Responses <-> Chat Completions.
       // "responses" forwards the Responses payload upstream untouched.
       wire: entry.wire === "responses" ? "responses" : "chat",
+      forceNonStream: entry.forceNonStream === true,
+      sanitizeToolNames: entry.sanitizeToolNames === true,
       supports: {
         toolChoice: entry.supports?.toolChoice !== false,
         parallelToolCalls: entry.supports?.parallelToolCalls === true,
@@ -230,8 +232,19 @@ function toolNameOf(tool) {
 // servers). Chat Completions has no nesting, so members are flattened to
 // `<namespace>.<tool>` and converted back with the namespace field on the way
 // out, which is the shape Codex uses for namespaced calls.
-function analyzeTools(request) {
+function wireToolName(name, provider) {
+  if (typeof name !== "string" || !provider?.sanitizeToolNames) return name;
+  // Some providers accept namespace dots, while Kimi requires a leading
+  // letter plus letters, numbers, underscores, and dashes.
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, "_");
+  const safeName = /^[A-Za-z]/.test(safe) ? safe : `tool_${safe}`;
+  if (safeName.length <= 64) return safeName;
+  return `tool_${crypto.createHash("sha256").update(name).digest("hex").slice(0, 12)}`;
+}
+
+function analyzeTools(request, provider) {
   const custom = new Set();
+  const customByWire = new Map();
   const namespaces = new Map();
   const bare = new Map();
   const bareAmbiguous = new Set();
@@ -240,6 +253,7 @@ function analyzeTools(request) {
     if (!tool || typeof tool !== "object") continue;
     if (tool.type === "custom" && toolNameOf(tool)) {
       custom.add(tool.name);
+      customByWire.set(wireToolName(tool.name, provider), tool.name);
       flat.add(tool.name);
       continue;
     }
@@ -252,13 +266,14 @@ function analyzeTools(request) {
         description: member.description ?? "",
         parameters: member.parameters ?? { type: "object", properties: {} },
       };
-      namespaces.set(`${tool.name}.${member.name}`, entry);
-      flat.add(`${tool.name}.${member.name}`);
+      const flatName = `${tool.name}.${member.name}`;
+      namespaces.set(wireToolName(flatName, provider), entry);
+      flat.add(wireToolName(flatName, provider));
       if (bare.has(member.name) || bareAmbiguous.has(member.name)) {
         bareAmbiguous.add(member.name);
         bare.delete(member.name);
       } else {
-        bare.set(member.name, entry);
+        bare.set(wireToolName(member.name, provider), entry);
       }
     }
   }
@@ -267,11 +282,12 @@ function analyzeTools(request) {
   for (const name of [...bare.keys()]) {
     if (flat.has(name)) bare.delete(name);
   }
-  return { custom, namespaces, bare };
+  return { custom, customByWire, namespaces, bare };
 }
 
 function toolCallDescriptor(name, index) {
   if (index.custom.has(name)) return { kind: "custom", name };
+  if (index.customByWire.has(name)) return { kind: "custom", name: index.customByWire.get(name) };
   const namespaced = index.namespaces.get(name);
   if (namespaced) return { kind: "function", name: namespaced.name, namespace: namespaced.namespace };
   const bare = index.bare.get(name);
@@ -279,19 +295,20 @@ function toolCallDescriptor(name, index) {
   return { kind: "function", name };
 }
 
-function historyToolName(item, index) {
+function historyToolName(item, index, provider) {
   if (item.namespace) {
     const flat = `${item.namespace}.${item.name}`;
-    return index.namespaces.has(flat) ? flat : item.name;
+    if (index.namespaces.has(flat)) return wireToolName(flat, provider);
   }
   const bare = index.bare.get(item.name);
-  return bare ? `${bare.namespace}.${bare.name}` : item.name;
+  if (bare) return wireToolName(`${bare.namespace}.${bare.name}`, provider);
+  return wireToolName(item.name, provider);
 }
 
 // Codex sends `apply_patch` (and other freeform tools) as `type: "custom"`.
 // Chat Completions has no freeform tool type, so expose them as function tools
 // taking a single `input` string and convert the call back on the way out.
-function toChatTools(request, index) {
+function toChatTools(request, index, provider) {
   const out = [];
   // Order follows the incoming request so the model sees the same tool order
   // Codex declared; namespace members are expanded where the group appears.
@@ -302,7 +319,7 @@ function toChatTools(request, index) {
       out.push({
         type: "function",
         function: {
-          name,
+          name: wireToolName(name, provider),
           description: tool.description ?? "",
           parameters: tool.parameters ?? { type: "object", properties: {} },
         },
@@ -311,7 +328,7 @@ function toChatTools(request, index) {
       out.push({
         type: "function",
         function: {
-          name,
+          name: wireToolName(name, provider),
           description: tool.description
             ?? `Freeform tool. Put the complete payload in the "input" string.`,
           parameters: {
@@ -354,6 +371,11 @@ function toChatTools(request, index) {
           },
         });
       }
+    } else if (tool.type === "web_search") {
+      // web_search is not a Chat Completions tool; it controls the
+      // `search_enabled` parameter on the request body. Skip it here
+      // — buildChatRequest handles the flag.
+      continue;
     } else {
       log(`tool skipped type=${tool.type ?? "unknown"} name=${name || "?"} — not translatable to Chat Completions`);
     }
@@ -361,7 +383,7 @@ function toChatTools(request, index) {
   return out;
 }
 
-function toChatToolChoice(toolChoice) {
+function toChatToolChoice(toolChoice, provider) {
   if (toolChoice == null) return undefined;
   if (typeof toolChoice === "string") {
     return ["auto", "none", "required"].includes(toolChoice) ? toolChoice : undefined;
@@ -369,7 +391,7 @@ function toChatToolChoice(toolChoice) {
   if (typeof toolChoice === "object") {
     if (toolChoice.type === "function" || toolChoice.type === "custom") {
       const name = toolChoice.name ?? toolChoice.function?.name;
-      if (name) return { type: "function", function: { name } };
+      if (name) return { type: "function", function: { name: wireToolName(name, provider) } };
     }
     // Chat Completions has no equivalent allow-list; the tool list already
     // restricts what the model may call, so fall back to automatic choice.
@@ -380,7 +402,7 @@ function toChatToolChoice(toolChoice) {
 
 const TOOL_OUTPUT_TYPES = new Set(["function_call_output", "custom_tool_call_output", "local_shell_call_output"]);
 
-function toChatMessages(body, index) {
+function toChatMessages(body, index, provider) {
   const messages = [];
   if (body.instructions) messages.push({ role: "system", content: contentText(body.instructions) });
   if (typeof body.input === "string") {
@@ -420,13 +442,13 @@ function toChatMessages(body, index) {
       startAssistant().tool_calls.push({
         id: item.call_id,
         type: "function",
-        function: { name: historyToolName(item, index), arguments: item.arguments ?? "{}" },
+        function: { name: historyToolName(item, index, provider), arguments: item.arguments ?? "{}" },
       });
     } else if (item.type === "custom_tool_call") {
       startAssistant().tool_calls.push({
         id: item.call_id,
         type: "function",
-        function: { name: item.name, arguments: JSON.stringify({ input: item.input ?? "" }) },
+        function: { name: wireToolName(item.name, provider), arguments: JSON.stringify({ input: item.input ?? "" }) },
       });
     } else if (item.type === "local_shell_call") {
       startAssistant().tool_calls.push({
@@ -470,19 +492,23 @@ function summarizeInput(input) {
 function buildChatRequest(request, provider, toolIndex) {
   const chat = {
     model: request.model,
-    messages: toChatMessages(request, toolIndex),
-    stream: Boolean(request.stream),
+    messages: toChatMessages(request, toolIndex, provider),
+    stream: !provider.forceNonStream && Boolean(request.stream),
   };
-  const tools = toChatTools(request, toolIndex);
+  const tools = toChatTools(request, toolIndex, provider);
   if (tools.length > 0) chat.tools = tools;
   if (provider.supports.toolChoice) {
-    const toolChoice = toChatToolChoice(request.tool_choice);
+    const toolChoice = toChatToolChoice(request.tool_choice, provider);
     if (toolChoice !== undefined) chat.tool_choice = toolChoice;
   }
   if (provider.supports.parallelToolCalls && typeof request.parallel_tool_calls === "boolean") {
     chat.parallel_tool_calls = request.parallel_tool_calls;
   }
   if (typeof request.temperature === "number") chat.temperature = request.temperature;
+  // Translate web_search tool (Responses API) to search_enabled (Chat Completions)
+  if (request.tools?.some(t => t?.type === "web_search")) {
+    chat.search_enabled = true;
+  }
   if (typeof request.max_output_tokens === "number") chat.max_tokens = request.max_output_tokens;
   return chat;
 }
@@ -601,6 +627,26 @@ function json(res, status, body) {
 function sendEvent(res, type, data) {
   if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function streamSyntheticResponsesResult(res, result) {
+  if (res.writableEnded || res.destroyed) return;
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.flushHeaders?.();
+  sendEvent(res, "response.created", {
+    type: "response.created",
+    response: { ...result, status: "in_progress", output: [] },
+  });
+  for (const item of result.output) {
+    sendEvent(res, "response.output_item.done", { type: "response.output_item.done", item });
+  }
+  sendEvent(res, "response.completed", { type: "response.completed", response: result });
+  res.end();
 }
 
 function failedResponse(request, message, code) {
@@ -1066,7 +1112,7 @@ async function attemptUpstream(res, provider, request, chatRequest, toolIndex, s
     };
   }
 
-  if (request.stream) {
+  if (request.stream && !provider.forceNonStream) {
     return streamChat(res, upstream, request, startedAt, {
       controller,
       timing,
@@ -1100,7 +1146,12 @@ async function attemptUpstream(res, provider, request, chatRequest, toolIndex, s
     `non-stream done provider=${provider.name} model=${request.model} attempt=${attempt} durationMs=${Date.now() - startedAt}`
     + (upstreamRequestId ? ` requestId=${upstreamRequestId}` : "")
   );
-  json(res, 200, responsesResult(chat, request, toolIndex));
+  const result = responsesResult(chat, request, toolIndex);
+  if (request.stream && provider.forceNonStream) {
+    streamSyntheticResponsesResult(res, result);
+  } else {
+    json(res, 200, result);
+  }
   return { done: true };
 }
 
@@ -1146,7 +1197,7 @@ async function forwardResponses(res, provider, request, rawRequest, startedAt) {
       headers: {
         authorization: `Bearer ${provider.apiKey}`,
         "content-type": "application/json",
-        accept: request.stream ? "text/event-stream" : "application/json",
+        accept: request.stream && !provider.forceNonStream ? "text/event-stream" : "application/json",
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -1306,7 +1357,7 @@ async function handle(req, res) {
     return;
   }
 
-  const toolIndex = analyzeTools(request);
+  const toolIndex = analyzeTools(request, provider);
   const chatRequest = buildChatRequest(request, provider, toolIndex);
   const chatToolCount = chatRequest.tools?.length ?? 0;
   const requestedToolCount = Array.isArray(request.tools) ? request.tools.length : 0;
